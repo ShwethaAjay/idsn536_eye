@@ -103,7 +103,7 @@ def download_audio():
         
         # Connect to MongoDB
         db = connect_to_mongodb(db_name)
-        if not db:
+        if db is None:
             return jsonify({"error": "Failed to connect to MongoDB"}), 500
         
         # Create GridFS instance
