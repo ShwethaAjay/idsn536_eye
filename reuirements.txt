@@ -1,0 +1,4 @@
+﻿flask
+pymongo
+gridfs
+gunicorn
