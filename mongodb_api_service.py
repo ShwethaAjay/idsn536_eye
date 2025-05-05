@@ -111,8 +111,8 @@ def download_audio():
         original_filename = grid_out.filename
 
         # Check if we need to convert from RAW to WAV
-        if format_type == 'wav' and original_filename.lower().endswith('.raw'):
-            try:
+        # if format_type == 'wav' and original_filename.lower().endswith('.raw'):
+        try:
                 # Create WAV from RAW
                 # Assuming defaults: 1 channel (mono), 16-bit samples, 44100 Hz sample rate
                 # You may need to adjust these parameters based on your raw audio format
@@ -154,7 +154,7 @@ def download_audio():
                     download_name=new_filename
                 )
                 
-            except Exception as e:
+        except Exception as e:
                 app.logger.error(f"RAW to WAV conversion error: {str(e)}")
                 return jsonify({"error": f"Failed to convert RAW to WAV: {str(e)}"}), 500
         
