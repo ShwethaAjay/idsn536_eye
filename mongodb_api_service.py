@@ -125,7 +125,7 @@ def download_audio():
                 # Define WAV parameters (adjust based on your RAW format)
                 channels = 1  # Mono
                 sample_width = 2  # 16-bit
-                sample_rate = 44100  # 44.1 kHz
+                sample_rate = 48000  # 44.1 kHz
                 
                 # Create and configure the WAV writer
                 with wave.open(wav_buffer, 'wb') as wav_file:
