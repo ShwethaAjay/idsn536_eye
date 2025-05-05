@@ -79,107 +79,14 @@ def upload_audio():
         app.logger.error(f"Upload error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/download', methods=['GET'])
-def download_audio():
-    """Download audio with proper MIME type handling and RAW to WAV conversion"""
-    try:
-        db_name = request.args.get('db', DEFAULT_DB)
-        collection = request.args.get('collection', DEFAULT_COLLECTION)
-        file_id = request.args.get('file_id')
-        format_type = request.args.get('format', 'original').lower()  # Default to original format
-
-        if not file_id:
-            return jsonify({"error": "Missing file_id parameter"}), 400
-
-        # Validate ObjectId format
-        try:
-            obj_id = ObjectId(file_id)
-        except InvalidId:
-            return jsonify({"error": "Invalid file_id format"}), 400
-
-        db = connect_to_mongodb(db_name)
-        if db is None:
-            return jsonify({"error": "Database connection failed"}), 500
-
-        fs = gridfs.GridFS(db, collection=collection)
-        
-        if not fs.exists(obj_id):
-            return jsonify({"error": "File not found"}), 404
-
-        grid_out = fs.get(obj_id)
-        audio_data = grid_out.read()
-        original_filename = grid_out.filename
-
-        # Check if we need to convert from RAW to WAV
-        # if format_type == 'wav' and original_filename.lower().endswith('.raw'):
-        try:
-                # Create WAV from RAW
-                # Assuming defaults: 1 channel (mono), 16-bit samples, 44100 Hz sample rate
-                # You may need to adjust these parameters based on your raw audio format
-                import wave
-                import struct
-                
-                # Create a BytesIO buffer for the WAV file
-                wav_buffer = io.BytesIO()
-                
-                # Define WAV parameters (adjust based on your RAW format)
-                channels = 1  # Mono
-                sample_width = 2  # 16-bit
-                sample_rate = 48000  # 44.1 kHz
-                
-                # Create and configure the WAV writer
-                with wave.open(wav_buffer, 'wb') as wav_file:
-                    wav_file.setnchannels(channels)
-                    wav_file.setsampwidth(sample_width)
-                    wav_file.setframerate(sample_rate)
-                    
-                    # If raw data is byte string, write directly
-                    # For integer PCM data, you'd need to pack it with struct.pack
-                    wav_file.writeframes(audio_data)
-                
-                # Reset buffer position to the start
-                wav_buffer.seek(0)
-                
-                # Replace the original data with the WAV data
-                audio_data = wav_buffer.read()
-                
-                # Update filename to reflect WAV format
-                new_filename = os.path.splitext(original_filename)[0] + '.wav'
-                mime_type = 'audio/wav'
-                
-                return send_file(
-                    io.BytesIO(audio_data),
-                    mimetype=mime_type,
-                    as_attachment=True,
-                    download_name=new_filename
-                )
-                
-        except Exception as e:
-                app.logger.error(f"RAW to WAV conversion error: {str(e)}")
-                return jsonify({"error": f"Failed to convert RAW to WAV: {str(e)}"}), 500
-        
-        # If no conversion needed or requested, return original file
-        mime_type, _ = mimetypes.guess_type(original_filename)
-        if not mime_type:
-            mime_type = 'application/octet-stream'  # Fallback
-
-        return send_file(
-            io.BytesIO(audio_data),
-            mimetype=mime_type,
-            as_attachment=True,
-            download_name=original_filename
-        )
-
-    except Exception as e:
-        app.logger.error(f"Download error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
 # @app.route('/download', methods=['GET'])
 # def download_audio():
-#     """Download audio with proper MIME type handling"""
+#     """Download audio with proper MIME type handling and RAW to WAV conversion"""
 #     try:
 #         db_name = request.args.get('db', DEFAULT_DB)
 #         collection = request.args.get('collection', DEFAULT_COLLECTION)
 #         file_id = request.args.get('file_id')
+#         format_type = request.args.get('format', 'original').lower()  # Default to original format
 
 #         if not file_id:
 #             return jsonify({"error": "Missing file_id parameter"}), 400
@@ -200,6 +107,99 @@ def download_audio():
 #             return jsonify({"error": "File not found"}), 404
 
 #         grid_out = fs.get(obj_id)
+#         audio_data = grid_out.read()
+#         original_filename = grid_out.filename
+
+#         # Check if we need to convert from RAW to WAV
+#         # if format_type == 'wav' and original_filename.lower().endswith('.raw'):
+#         try:
+#                 # Create WAV from RAW
+#                 # Assuming defaults: 1 channel (mono), 16-bit samples, 44100 Hz sample rate
+#                 # You may need to adjust these parameters based on your raw audio format
+#                 import wave
+#                 import struct
+                
+#                 # Create a BytesIO buffer for the WAV file
+#                 wav_buffer = io.BytesIO()
+                
+#                 # Define WAV parameters (adjust based on your RAW format)
+#                 channels = 1  # Mono
+#                 sample_width = 2  # 16-bit
+#                 sample_rate = 48000  # 44.1 kHz
+                
+#                 # Create and configure the WAV writer
+#                 with wave.open(wav_buffer, 'wb') as wav_file:
+#                     wav_file.setnchannels(channels)
+#                     wav_file.setsampwidth(sample_width)
+#                     wav_file.setframerate(sample_rate)
+                    
+#                     # If raw data is byte string, write directly
+#                     # For integer PCM data, you'd need to pack it with struct.pack
+#                     wav_file.writeframes(audio_data)
+                
+#                 # Reset buffer position to the start
+#                 wav_buffer.seek(0)
+                
+#                 # Replace the original data with the WAV data
+#                 audio_data = wav_buffer.read()
+                
+#                 # Update filename to reflect WAV format
+#                 new_filename = os.path.splitext(original_filename)[0] + '.wav'
+#                 mime_type = 'audio/wav'
+                
+#                 return send_file(
+#                     io.BytesIO(audio_data),
+#                     mimetype=mime_type,
+#                     as_attachment=True,
+#                     download_name=new_filename
+#                 )
+                
+#         except Exception as e:
+#                 app.logger.error(f"RAW to WAV conversion error: {str(e)}")
+#                 return jsonify({"error": f"Failed to convert RAW to WAV: {str(e)}"}), 500
+        
+#         # If no conversion needed or requested, return original file
+#         mime_type, _ = mimetypes.guess_type(original_filename)
+#         if not mime_type:
+#             mime_type = 'application/octet-stream'  # Fallback
+
+#         return send_file(
+#             io.BytesIO(audio_data),
+#             mimetype=mime_type,
+#             as_attachment=True,
+#             download_name=original_filename
+#         )
+
+#     except Exception as e:
+#         app.logger.error(f"Download error: {str(e)}")
+#         return jsonify({"error": str(e)}), 500
+@app.route('/download', methods=['GET'])
+def download_audio():
+    """Download audio with proper MIME type handling"""
+    try:
+        db_name = request.args.get('db', DEFAULT_DB)
+        collection = request.args.get('collection', DEFAULT_COLLECTION)
+        file_id = request.args.get('file_id')
+
+        if not file_id:
+            return jsonify({"error": "Missing file_id parameter"}), 400
+
+        # Validate ObjectId format
+        try:
+            obj_id = ObjectId(file_id)
+        except InvalidId:
+            return jsonify({"error": "Invalid file_id format"}), 400
+
+        db = connect_to_mongodb(db_name)
+        if db is None:
+            return jsonify({"error": "Database connection failed"}), 500
+
+        fs = gridfs.GridFS(db, collection=collection)
+        
+        if not fs.exists(obj_id):
+            return jsonify({"error": "File not found"}), 404
+
+        grid_out = fs.get(obj_id)
 #         raw_data = grid_out.read()
 
 #         # Create WAV header with ESP32 default settings
@@ -225,23 +225,23 @@ def download_audio():
 #     except Exception as e:
 #         return jsonify({"error": str(e)}), 500
 # MAIN WORK
-#         audio_data = grid_out.read()
+        audio_data = grid_out.read()
 
-#         # Determine MIME type from filename
-#         mime_type, _ = mimetypes.guess_type(grid_out.filename)
-#         if not mime_type:
-#             mime_type = 'application/octet-stream'  # Fallback
+        # Determine MIME type from filename
+        mime_type, _ = mimetypes.guess_type(grid_out.filename)
+        if not mime_type:
+            mime_type = 'application/octet-stream'  # Fallback
 
-#         return send_file(
-#             io.BytesIO(audio_data),
-#             mimetype=mime_type,
-#             as_attachment=True,
-#             download_name=grid_out.filename
-#         )
+        return send_file(
+            io.BytesIO(audio_data),
+            mimetype=mime_type,
+            as_attachment=True,
+            download_name=grid_out.filename
+        )
 
-#     except Exception as e:
-#         app.logger.error(f"Download error: {str(e)}")
-#         return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        app.logger.error(f"Download error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/list', methods=['GET'])
 def list_files():
