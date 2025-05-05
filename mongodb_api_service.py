@@ -99,6 +99,10 @@ def download_audio():
         grid_out = fs.get(ObjectId(file_id))
         raw_data = grid_out.read()
 
+        import numpy as np
+        raw_data = np.frombuffer(raw_data, dtype=np.int16)
+        raw_data = (raw_data + 32768).astype(np.uint16).tobytes()
+
         # WAV parameters: adjust to match your ESP32 recording settings
         channels = 1          # Mono
         sampwidth = 1         # 8-bit PCM (1 byte)
