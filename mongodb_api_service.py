@@ -100,33 +100,33 @@ def download_audio():
         grid_out = fs.get(ObjectId(file_id))
         raw_data = grid_out.read()
 
-        import numpy as np
-        raw_data = np.frombuffer(raw_data, dtype=np.int16)
-        raw_data = (raw_data + 32768).astype(np.uint16).tobytes()
+        # ESP32 Audio Parameters (MODIFY THESE)
+    sampwidth = 1  # 1 = 8-bit, 2 = 16-bit
+    framerate = 16000
 
-        # WAV parameters: adjust to match your ESP32 recording settings
-        channels = 1          # Mono
-        sampwidth = 1         # 8-bit PCM (1 byte)
-        framerate = 16000     # 16kHz sample rate
+    # Convert raw bytes to numpy array
+    try:
+        if sampwidth == 1:
+            # Unsigned 8-bit (0-255)
+            audio_array = np.frombuffer(raw_data, dtype=np.uint8)
+        elif sampwidth == 2:
+            # Signed 16-bit (-32768 to 32767)
+            if len(raw_data) % 2 != 0:
+                raw_data += b'\x00'  # Pad if odd bytes
+            audio_array = np.frombuffer(raw_data, dtype=np.int16)
+    except ValueError as e:
+        return jsonify({"error": f"Data format mismatch: {str(e)}"}), 400
 
-        wav_buffer = io.BytesIO()
+    # Create WAV
+    with io.BytesIO() as wav_buffer:
         with wave.open(wav_buffer, 'wb') as wav_file:
-            wav_file.setnchannels(channels)
+            wav_file.setnchannels(1)
             wav_file.setsampwidth(sampwidth)
             wav_file.setframerate(framerate)
-            wav_file.writeframes(raw_data)
-
+            wav_file.writeframes(audio_array.tobytes())
+        
         wav_buffer.seek(0)
-        return send_file(
-            wav_buffer,
-            mimetype='audio/wav',
-            as_attachment=True,
-            download_name=grid_out.filename.replace('.raw', '.wav')
-        )
-
-    except Exception as e:
-        app.logger.error(f"Error in download: {e}")
-        return jsonify({"error": str(e)}), 500
+        return send_file(wav_buffer, mimetype='audio/wav', ...)
 # @app.route('/download', methods=['GET'])
 # def download_audio():
 #     """Download audio with proper MIME type handling"""
