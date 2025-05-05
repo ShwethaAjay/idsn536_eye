@@ -85,48 +85,52 @@ def download_audio():
         db_name = request.args.get('db', 'Anonymeye')
         collection_name = request.args.get('collection', 'audio_files')
         file_id = request.args.get('file_id')
-
         if not file_id:
             return jsonify({"error": "No file_id provided"}), 400
-
         db = connect_to_mongodb(db_name)
         if db is None:
             return jsonify({"error": "Failed to connect to MongoDB"}), 500
-
         fs = gridfs.GridFS(db, collection=collection_name)
         if not fs.exists(ObjectId(file_id)):
             return jsonify({"error": f"No file found with ID: {file_id}"}), 404
-
         grid_out = fs.get(ObjectId(file_id))
         raw_data = grid_out.read()
-
-        # ESP32 Audio Parameters (MODIFY THESE)
-    sampwidth = 1  # 1 = 8-bit, 2 = 16-bit
-    framerate = 16000
-
-    # Convert raw bytes to numpy array
-    try:
-        if sampwidth == 1:
-            # Unsigned 8-bit (0-255)
-            audio_array = np.frombuffer(raw_data, dtype=np.uint8)
-        elif sampwidth == 2:
-            # Signed 16-bit (-32768 to 32767)
-            if len(raw_data) % 2 != 0:
-                raw_data += b'\x00'  # Pad if odd bytes
-            audio_array = np.frombuffer(raw_data, dtype=np.int16)
-    except ValueError as e:
-        return jsonify({"error": f"Data format mismatch: {str(e)}"}), 400
-
-    # Create WAV
-    with io.BytesIO() as wav_buffer:
-        with wave.open(wav_buffer, 'wb') as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(sampwidth)
-            wav_file.setframerate(framerate)
-            wav_file.writeframes(audio_array.tobytes())
         
-        wav_buffer.seek(0)
-        return send_file(wav_buffer, mimetype='audio/wav', ...)
+        # ESP32 Audio Parameters (MODIFY THESE)
+        sampwidth = 1  # 1 = 8-bit, 2 = 16-bit
+        framerate = 16000
+        
+        # Convert raw bytes to numpy array
+        try:
+            if sampwidth == 1:
+                # Unsigned 8-bit (0-255)
+                audio_array = np.frombuffer(raw_data, dtype=np.uint8)
+            elif sampwidth == 2:
+                # Signed 16-bit (-32768 to 32767)
+                if len(raw_data) % 2 != 0:
+                    raw_data += b'\x00'  # Pad if odd bytes
+                audio_array = np.frombuffer(raw_data, dtype=np.int16)
+        except ValueError as e:
+            return jsonify({"error": f"Data format mismatch: {str(e)}"}), 400
+            
+        # Create WAV
+        with io.BytesIO() as wav_buffer:
+            with wave.open(wav_buffer, 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(sampwidth)
+                wav_file.setframerate(framerate)
+                wav_file.writeframes(audio_array.tobytes())
+            
+            wav_buffer.seek(0)
+            filename = f"audio_{file_id}.wav"
+            return send_file(
+                wav_buffer, 
+                mimetype='audio/wav',
+                as_attachment=True,
+                download_name=filename
+            )
+    except Exception as e:
+        return jsonify({"error": f"Error processing audio: {str(e)}"}), 500
 # @app.route('/download', methods=['GET'])
 # def download_audio():
 #     """Download audio with proper MIME type handling"""
