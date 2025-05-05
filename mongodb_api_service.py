@@ -80,55 +80,100 @@ def upload_audio():
 
 @app.route('/download', methods=['GET'])
 def download_audio():
-    """Download audio with proper MIME type handling"""
     try:
-        db_name = request.args.get('db', DEFAULT_DB)
-        collection = request.args.get('collection', DEFAULT_COLLECTION)
+        db_name = request.args.get('db', 'Anonymeye')
+        collection_name = request.args.get('collection', 'audio_files')
         file_id = request.args.get('file_id')
 
         if not file_id:
-            return jsonify({"error": "Missing file_id parameter"}), 400
-
-        # Validate ObjectId format
-        try:
-            obj_id = ObjectId(file_id)
-        except InvalidId:
-            return jsonify({"error": "Invalid file_id format"}), 400
+            return jsonify({"error": "No file_id provided"}), 400
 
         db = connect_to_mongodb(db_name)
         if db is None:
-            return jsonify({"error": "Database connection failed"}), 500
+            return jsonify({"error": "Failed to connect to MongoDB"}), 500
 
-        fs = gridfs.GridFS(db, collection=collection)
-        
-        if not fs.exists(obj_id):
-            return jsonify({"error": "File not found"}), 404
+        fs = gridfs.GridFS(db, collection=collection_name)
+        if not fs.exists(ObjectId(file_id)):
+            return jsonify({"error": f"No file found with ID: {file_id}"}), 404
 
-        grid_out = fs.get(obj_id)
+        grid_out = fs.get(ObjectId(file_id))
         raw_data = grid_out.read()
 
-        # Create WAV header with ESP32 default settings
-        channels = 1    # Mono
-        sampwidth = 1   # 8-bit (1 byte/sample)
-        framerate = 16000  # 16kHz sample rate
+        # WAV parameters: adjust to match your ESP32 recording settings
+        channels = 1          # Mono
+        sampwidth = 1         # 8-bit PCM (1 byte)
+        framerate = 16000     # 16kHz sample rate
 
-        with io.BytesIO() as wav_buffer:
-            with wave.open(wav_buffer, 'wb') as wav_file:
-                wav_file.setnchannels(channels)
-                wav_file.setsampwidth(sampwidth)
-                wav_file.setframerate(framerate)
-                wav_file.writeframes(raw_data)
-            
-            wav_buffer.seek(0)
-            return send_file(
-                wav_buffer,
-                mimetype='audio/wav',
-                as_attachment=True,
-                download_name=f"{grid_out.filename.split('.')[0]}.wav"
-            )
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, 'wb') as wav_file:
+            wav_file.setnchannels(channels)
+            wav_file.setsampwidth(sampwidth)
+            wav_file.setframerate(framerate)
+            wav_file.writeframes(raw_data)
+
+        wav_buffer.seek(0)
+        return send_file(
+            wav_buffer,
+            mimetype='audio/wav',
+            as_attachment=True,
+            download_name=grid_out.filename.replace('.raw', '.wav')
+        )
 
     except Exception as e:
+        app.logger.error(f"Error in download: {e}")
         return jsonify({"error": str(e)}), 500
+# @app.route('/download', methods=['GET'])
+# def download_audio():
+#     """Download audio with proper MIME type handling"""
+#     try:
+#         db_name = request.args.get('db', DEFAULT_DB)
+#         collection = request.args.get('collection', DEFAULT_COLLECTION)
+#         file_id = request.args.get('file_id')
+
+#         if not file_id:
+#             return jsonify({"error": "Missing file_id parameter"}), 400
+
+#         # Validate ObjectId format
+#         try:
+#             obj_id = ObjectId(file_id)
+#         except InvalidId:
+#             return jsonify({"error": "Invalid file_id format"}), 400
+
+#         db = connect_to_mongodb(db_name)
+#         if db is None:
+#             return jsonify({"error": "Database connection failed"}), 500
+
+#         fs = gridfs.GridFS(db, collection=collection)
+        
+#         if not fs.exists(obj_id):
+#             return jsonify({"error": "File not found"}), 404
+
+#         grid_out = fs.get(obj_id)
+#         raw_data = grid_out.read()
+
+#         # Create WAV header with ESP32 default settings
+#         channels = 1    # Mono
+#         sampwidth = 1   # 8-bit (1 byte/sample)
+#         framerate = 16000  # 16kHz sample rate
+
+#         with io.BytesIO() as wav_buffer:
+#             with wave.open(wav_buffer, 'wb') as wav_file:
+#                 wav_file.setnchannels(channels)
+#                 wav_file.setsampwidth(sampwidth)
+#                 wav_file.setframerate(framerate)
+#                 wav_file.writeframes(raw_data)
+            
+#             wav_buffer.seek(0)
+#             return send_file(
+#                 wav_buffer,
+#                 mimetype='audio/wav',
+#                 as_attachment=True,
+#                 download_name=f"{grid_out.filename.split('.')[0]}.wav"
+#             )
+
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
+# MAIN WORK
     #     audio_data = grid_out.read()
 
     #     # Determine MIME type from filename
