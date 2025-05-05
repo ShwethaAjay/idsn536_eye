@@ -104,23 +104,47 @@ def download_audio():
             return jsonify({"error": "File not found"}), 404
 
         grid_out = fs.get(obj_id)
-        audio_data = grid_out.read()
+        raw_data = grid_out.read()
 
-        # Determine MIME type from filename
-        mime_type, _ = mimetypes.guess_type(grid_out.filename)
-        if not mime_type:
-            mime_type = 'application/octet-stream'  # Fallback
+        # Create WAV header with ESP32 default settings
+        channels = 1    # Mono
+        sampwidth = 1   # 8-bit (1 byte/sample)
+        framerate = 16000  # 16kHz sample rate
 
-        return send_file(
-            io.BytesIO(audio_data),
-            mimetype=mime_type,
-            as_attachment=True,
-            download_name=grid_out.filename
-        )
+        with io.BytesIO() as wav_buffer:
+            with wave.open(wav_buffer, 'wb') as wav_file:
+                wav_file.setnchannels(channels)
+                wav_file.setsampwidth(sampwidth)
+                wav_file.setframerate(framerate)
+                wav_file.writeframes(raw_data)
+            
+            wav_buffer.seek(0)
+            return send_file(
+                wav_buffer,
+                mimetype='audio/wav',
+                as_attachment=True,
+                download_name=f"{grid_out.filename.split('.')[0]}.wav"
+            )
 
     except Exception as e:
-        app.logger.error(f"Download error: {str(e)}")
         return jsonify({"error": str(e)}), 500
+    #     audio_data = grid_out.read()
+
+    #     # Determine MIME type from filename
+    #     mime_type, _ = mimetypes.guess_type(grid_out.filename)
+    #     if not mime_type:
+    #         mime_type = 'application/octet-stream'  # Fallback
+
+    #     return send_file(
+    #         io.BytesIO(audio_data),
+    #         mimetype=mime_type,
+    #         as_attachment=True,
+    #         download_name=grid_out.filename
+    #     )
+
+    # except Exception as e:
+    #     app.logger.error(f"Download error: {str(e)}")
+    #     return jsonify({"error": str(e)}), 500
 
 @app.route('/list', methods=['GET'])
 def list_files():
