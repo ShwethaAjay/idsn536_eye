@@ -1,14 +1,11 @@
 """
-MongoDB Audio API Service (Improved)
-
-Key enhancements:
-- Fixed database connection checks
-- Proper audio MIME type detection
-- Better error handling
-- GridFS optimizations
+MongoDB Audio API with Encryption & Streaming
+- AES-256 encryption for stored audio
+- Chunked processing for memory efficiency
+- Automatic MIME type handling
 """
 
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 import gridfs
@@ -18,75 +15,283 @@ import io
 import os
 import mimetypes
 from datetime import datetime
-import wave
-import numpy as np
+from cryptography.fernet import Fernet
 
 app = Flask(__name__)
 
-# MongoDB configuration
+# Configuration
 CONNECTION_STRING = "mongodb+srv://Shwetha:anonymeye536@cluster0.ezisqjd.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 DEFAULT_DB = "Anonymeye"
 DEFAULT_COLLECTION = "audio_files"
+CHUNK_SIZE = 1024 * 256  # 256KB chunks for memory efficiency
+
+# Encryption setup
+FERNET_KEY = os.environ.get('ENCRYPTION_KEY')
+if not FERNET_KEY:
+    raise ValueError("ENCRYPTION_KEY environment variable required")
+fernet = Fernet(FERNET_KEY.encode())
 
 def connect_to_mongodb(db_name):
     """Establish MongoDB connection with error handling"""
     try:
         client = MongoClient(CONNECTION_STRING, server_api=ServerApi('1'))
-        client.admin.command('ping')  # Test connection
-        app.logger.info(f"Connected to MongoDB: {db_name}")
+        client.admin.command('ping')
         return client[db_name]
     except Exception as e:
-        app.logger.error(f"Connection failed: {str(e)}")
+        app.logger.error(f"MongoDB connection failed: {str(e)}")
         return None
 
 @app.route('/upload', methods=['POST'])
 def upload_audio():
-    """Upload audio to GridFS with proper metadata"""
+    """Encrypt and store audio in chunks"""
     try:
-        db_name = request.args.get('db', DEFAULT_DB)
-        collection = request.args.get('collection', DEFAULT_COLLECTION)
-        
-        db = connect_to_mongodb(db_name)
-        if db is None:
+        db = connect_to_mongodb(request.args.get('db', DEFAULT_DB))
+        if not db:
             return jsonify({"error": "Database connection failed"}), 500
 
-        fs = gridfs.GridFS(db, collection=collection)
-        audio_data = request.get_data()
+        fs = gridfs.GridFS(db)
+        encrypted_chunks = []
         
-        if not audio_data:
-            return jsonify({"error": "No audio data received"}), 400
+        # Encrypt in chunks from request stream
+        for chunk in request.stream.read(CHUNK_SIZE):
+            encrypted_chunks.append(fernet.encrypt(chunk))
 
-        # Generate filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"audio_{timestamp}.m4a"  # Changed to .m4a for better MIME detection
-
-        # Store with metadata
-        file_id = fs.put(audio_data,
-                        filename=filename,
-                        metadata={
-                            "upload_type": "audio",
-                            "source": "ESP32"
-                        })
-
+        # Store encrypted chunks
+        file_id = fs.put(b''.join(encrypted_chunks),
+                        filename=generate_filename(),
+                        metadata={"encrypted": True})
+        
         return jsonify({
             "status": "success",
             "file_id": str(file_id),
-            "filename": filename,
-            "size": len(audio_data)
+            "filename": fs.get(file_id).filename
         })
 
     except Exception as e:
-        app.logger.error(f"Upload error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/download/<file_id>', methods=['GET'])
+def download_audio(file_id):
+    """Stream decrypted audio with proper MIME type"""
+    try:
+        db = connect_to_mongodb(request.args.get('db', DEFAULT_DB))
+        if not db:
+            return jsonify({"error": "Database connection failed"}), 500
+
+        fs = gridfs.GridFS(db)
+        grid_out = fs.get(ObjectId(file_id))
+        
+        def generate():
+            # Decrypt and stream in chunks
+            for chunk in grid_out:
+                yield fernet.decrypt(chunk)
+        
+        mime_type = mimetypes.guess_type(grid_out.filename)[0] or 'audio/wav'
+        
+        return Response(
+            generate(),
+            mimetype=mime_type,
+            headers={"Content-Disposition": f"attachment; filename={grid_out.filename}"}
+        )
+
+    except InvalidId:
+        return jsonify({"error": "Invalid file ID format"}), 400
+    except gridfs.NoFile:
+        return jsonify({"error": "File not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+def generate_filename():
+    """Generate encrypted filename with timestamp"""
+    return f"enc_audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bin"
+
+if __name__ == '__main__':
+    mimetypes.init()
+    app.run(host='0.0.0.0', port=5001, debug=True)
+
+#--------------------------------------
+# """
+# MongoDB Audio API Service (Improved)
+
+# Key enhancements:
+# - Fixed database connection checks
+# - Proper audio MIME type detection
+# - Better error handling
+# - GridFS optimizations
+# """
+
+# from flask import Flask, request, jsonify, send_file
+# from pymongo import MongoClient
+# from pymongo.server_api import ServerApi
+# import gridfs
+# from bson import ObjectId
+# from bson.errors import InvalidId
+# import io
+# import os
+# import mimetypes
+# from datetime import datetime
+# import wave
+# import numpy as np
+
+# app = Flask(__name__)
+
+# # MongoDB configuration
+# CONNECTION_STRING = "mongodb+srv://Shwetha:anonymeye536@cluster0.ezisqjd.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+# DEFAULT_DB = "Anonymeye"
+# DEFAULT_COLLECTION = "audio_files"
+
+# def connect_to_mongodb(db_name):
+#     """Establish MongoDB connection with error handling"""
+#     try:
+#         client = MongoClient(CONNECTION_STRING, server_api=ServerApi('1'))
+#         client.admin.command('ping')  # Test connection
+#         app.logger.info(f"Connected to MongoDB: {db_name}")
+#         return client[db_name]
+#     except Exception as e:
+#         app.logger.error(f"Connection failed: {str(e)}")
+#         return None
+
+# @app.route('/upload', methods=['POST'])
+# def upload_audio():
+#     """Upload audio to GridFS with proper metadata"""
+#     try:
+#         db_name = request.args.get('db', DEFAULT_DB)
+#         collection = request.args.get('collection', DEFAULT_COLLECTION)
+        
+#         db = connect_to_mongodb(db_name)
+#         if db is None:
+#             return jsonify({"error": "Database connection failed"}), 500
+
+#         fs = gridfs.GridFS(db, collection=collection)
+#         audio_data = request.get_data()
+        
+#         if not audio_data:
+#             return jsonify({"error": "No audio data received"}), 400
+
+#         # Generate filename with timestamp
+#         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#         filename = f"audio_{timestamp}.m4a"  # Changed to .m4a for better MIME detection
+
+#         # Store with metadata
+#         file_id = fs.put(audio_data,
+#                         filename=filename,
+#                         metadata={
+#                             "upload_type": "audio",
+#                             "source": "ESP32"
+#                         })
+
+#         return jsonify({
+#             "status": "success",
+#             "file_id": str(file_id),
+#             "filename": filename,
+#             "size": len(audio_data)
+#         })
+
+#     except Exception as e:
+#         app.logger.error(f"Upload error: {str(e)}")
+#         return jsonify({"error": str(e)}), 500
+
+# # @app.route('/download', methods=['GET'])
+# # def download_audio():
+# #     """Download audio with proper MIME type handling and RAW to WAV conversion"""
+# #     try:
+# #         db_name = request.args.get('db', DEFAULT_DB)
+# #         collection = request.args.get('collection', DEFAULT_COLLECTION)
+# #         file_id = request.args.get('file_id')
+# #         format_type = request.args.get('format', 'original').lower()  # Default to original format
+
+# #         if not file_id:
+# #             return jsonify({"error": "Missing file_id parameter"}), 400
+
+# #         # Validate ObjectId format
+# #         try:
+# #             obj_id = ObjectId(file_id)
+# #         except InvalidId:
+# #             return jsonify({"error": "Invalid file_id format"}), 400
+
+# #         db = connect_to_mongodb(db_name)
+# #         if db is None:
+# #             return jsonify({"error": "Database connection failed"}), 500
+
+# #         fs = gridfs.GridFS(db, collection=collection)
+        
+# #         if not fs.exists(obj_id):
+# #             return jsonify({"error": "File not found"}), 404
+
+# #         grid_out = fs.get(obj_id)
+# #         audio_data = grid_out.read()
+# #         original_filename = grid_out.filename
+
+# #         # Check if we need to convert from RAW to WAV
+# #         # if format_type == 'wav' and original_filename.lower().endswith('.raw'):
+# #         try:
+# #                 # Create WAV from RAW
+# #                 # Assuming defaults: 1 channel (mono), 16-bit samples, 44100 Hz sample rate
+# #                 # You may need to adjust these parameters based on your raw audio format
+# #                 import wave
+# #                 import struct
+                
+# #                 # Create a BytesIO buffer for the WAV file
+# #                 wav_buffer = io.BytesIO()
+                
+# #                 # Define WAV parameters (adjust based on your RAW format)
+# #                 channels = 1  # Mono
+# #                 sample_width = 2  # 16-bit
+# #                 sample_rate = 48000  # 44.1 kHz
+                
+# #                 # Create and configure the WAV writer
+# #                 with wave.open(wav_buffer, 'wb') as wav_file:
+# #                     wav_file.setnchannels(channels)
+# #                     wav_file.setsampwidth(sample_width)
+# #                     wav_file.setframerate(sample_rate)
+                    
+# #                     # If raw data is byte string, write directly
+# #                     # For integer PCM data, you'd need to pack it with struct.pack
+# #                     wav_file.writeframes(audio_data)
+                
+# #                 # Reset buffer position to the start
+# #                 wav_buffer.seek(0)
+                
+# #                 # Replace the original data with the WAV data
+# #                 audio_data = wav_buffer.read()
+                
+# #                 # Update filename to reflect WAV format
+# #                 new_filename = os.path.splitext(original_filename)[0] + '.wav'
+# #                 mime_type = 'audio/wav'
+                
+# #                 return send_file(
+# #                     io.BytesIO(audio_data),
+# #                     mimetype=mime_type,
+# #                     as_attachment=True,
+# #                     download_name=new_filename
+# #                 )
+                
+# #         except Exception as e:
+# #                 app.logger.error(f"RAW to WAV conversion error: {str(e)}")
+# #                 return jsonify({"error": f"Failed to convert RAW to WAV: {str(e)}"}), 500
+        
+# #         # If no conversion needed or requested, return original file
+# #         mime_type, _ = mimetypes.guess_type(original_filename)
+# #         if not mime_type:
+# #             mime_type = 'application/octet-stream'  # Fallback
+
+# #         return send_file(
+# #             io.BytesIO(audio_data),
+# #             mimetype=mime_type,
+# #             as_attachment=True,
+# #             download_name=original_filename
+# #         )
+
+# #     except Exception as e:
+# #         app.logger.error(f"Download error: {str(e)}")
+# #         return jsonify({"error": str(e)}), 500
 # @app.route('/download', methods=['GET'])
 # def download_audio():
-#     """Download audio with proper MIME type handling and RAW to WAV conversion"""
+#     """Download audio with proper MIME type handling"""
 #     try:
 #         db_name = request.args.get('db', DEFAULT_DB)
 #         collection = request.args.get('collection', DEFAULT_COLLECTION)
 #         file_id = request.args.get('file_id')
-#         format_type = request.args.get('format', 'original').lower()  # Default to original format
 
 #         if not file_id:
 #             return jsonify({"error": "Missing file_id parameter"}), 400
@@ -107,59 +312,35 @@ def upload_audio():
 #             return jsonify({"error": "File not found"}), 404
 
 #         grid_out = fs.get(obj_id)
-#         audio_data = grid_out.read()
-#         original_filename = grid_out.filename
+# #         raw_data = grid_out.read()
 
-#         # Check if we need to convert from RAW to WAV
-#         # if format_type == 'wav' and original_filename.lower().endswith('.raw'):
-#         try:
-#                 # Create WAV from RAW
-#                 # Assuming defaults: 1 channel (mono), 16-bit samples, 44100 Hz sample rate
-#                 # You may need to adjust these parameters based on your raw audio format
-#                 import wave
-#                 import struct
-                
-#                 # Create a BytesIO buffer for the WAV file
-#                 wav_buffer = io.BytesIO()
-                
-#                 # Define WAV parameters (adjust based on your RAW format)
-#                 channels = 1  # Mono
-#                 sample_width = 2  # 16-bit
-#                 sample_rate = 48000  # 44.1 kHz
-                
-#                 # Create and configure the WAV writer
-#                 with wave.open(wav_buffer, 'wb') as wav_file:
-#                     wav_file.setnchannels(channels)
-#                     wav_file.setsampwidth(sample_width)
-#                     wav_file.setframerate(sample_rate)
-                    
-#                     # If raw data is byte string, write directly
-#                     # For integer PCM data, you'd need to pack it with struct.pack
-#                     wav_file.writeframes(audio_data)
-                
-#                 # Reset buffer position to the start
-#                 wav_buffer.seek(0)
-                
-#                 # Replace the original data with the WAV data
-#                 audio_data = wav_buffer.read()
-                
-#                 # Update filename to reflect WAV format
-#                 new_filename = os.path.splitext(original_filename)[0] + '.wav'
-#                 mime_type = 'audio/wav'
-                
-#                 return send_file(
-#                     io.BytesIO(audio_data),
-#                     mimetype=mime_type,
-#                     as_attachment=True,
-#                     download_name=new_filename
-#                 )
-                
-#         except Exception as e:
-#                 app.logger.error(f"RAW to WAV conversion error: {str(e)}")
-#                 return jsonify({"error": f"Failed to convert RAW to WAV: {str(e)}"}), 500
-        
-#         # If no conversion needed or requested, return original file
-#         mime_type, _ = mimetypes.guess_type(original_filename)
+# #         # Create WAV header with ESP32 default settings
+# #         channels = 1    # Mono
+# #         sampwidth = 1   # 8-bit (1 byte/sample)
+# #         framerate = 16000  # 16kHz sample rate
+
+# #         with io.BytesIO() as wav_buffer:
+# #             with wave.open(wav_buffer, 'wb') as wav_file:
+# #                 wav_file.setnchannels(channels)
+# #                 wav_file.setsampwidth(sampwidth)
+# #                 wav_file.setframerate(framerate)
+# #                 wav_file.writeframes(raw_data)
+            
+# #             wav_buffer.seek(0)
+# #             return send_file(
+# #                 wav_buffer,
+# #                 mimetype='audio/wav',
+# #                 as_attachment=True,
+# #                 download_name=f"{grid_out.filename.split('.')[0]}.wav"
+# #             )
+
+# #     except Exception as e:
+# #         return jsonify({"error": str(e)}), 500
+# # MAIN WORK
+#         audio_data = grid_out.read()
+
+#         # Determine MIME type from filename
+#         mime_type, _ = mimetypes.guess_type(grid_out.filename)
 #         if not mime_type:
 #             mime_type = 'application/octet-stream'  # Fallback
 
@@ -167,117 +348,48 @@ def upload_audio():
 #             io.BytesIO(audio_data),
 #             mimetype=mime_type,
 #             as_attachment=True,
-#             download_name=original_filename
+#             download_name=grid_out.filename
 #         )
 
 #     except Exception as e:
 #         app.logger.error(f"Download error: {str(e)}")
 #         return jsonify({"error": str(e)}), 500
-@app.route('/download', methods=['GET'])
-def download_audio():
-    """Download audio with proper MIME type handling"""
-    try:
-        db_name = request.args.get('db', DEFAULT_DB)
-        collection = request.args.get('collection', DEFAULT_COLLECTION)
-        file_id = request.args.get('file_id')
 
-        if not file_id:
-            return jsonify({"error": "Missing file_id parameter"}), 400
-
-        # Validate ObjectId format
-        try:
-            obj_id = ObjectId(file_id)
-        except InvalidId:
-            return jsonify({"error": "Invalid file_id format"}), 400
-
-        db = connect_to_mongodb(db_name)
-        if db is None:
-            return jsonify({"error": "Database connection failed"}), 500
-
-        fs = gridfs.GridFS(db, collection=collection)
+# @app.route('/list', methods=['GET'])
+# def list_files():
+#     """List all audio files with pagination"""
+#     try:
+#         db_name = request.args.get('db', DEFAULT_DB)
+#         collection = request.args.get('collection', DEFAULT_COLLECTION)
         
-        if not fs.exists(obj_id):
-            return jsonify({"error": "File not found"}), 404
+#         db = connect_to_mongodb(db_name)
+#         if db is None:
+#             return jsonify({"error": "Database connection failed"}), 500
 
-        grid_out = fs.get(obj_id)
-#         raw_data = grid_out.read()
+#         fs = gridfs.GridFS(db, collection=collection)
+#         files = []
 
-#         # Create WAV header with ESP32 default settings
-#         channels = 1    # Mono
-#         sampwidth = 1   # 8-bit (1 byte/sample)
-#         framerate = 16000  # 16kHz sample rate
+#         for grid_out in fs.find():
+#             files.append({
+#                 "file_id": str(grid_out._id),
+#                 "filename": grid_out.filename,
+#                 "length": grid_out.length,
+#                 "upload_date": grid_out.upload_date.isoformat(),
+#                 "content_type": grid_out.content_type
+#             })
 
-#         with io.BytesIO() as wav_buffer:
-#             with wave.open(wav_buffer, 'wb') as wav_file:
-#                 wav_file.setnchannels(channels)
-#                 wav_file.setsampwidth(sampwidth)
-#                 wav_file.setframerate(framerate)
-#                 wav_file.writeframes(raw_data)
-            
-#             wav_buffer.seek(0)
-#             return send_file(
-#                 wav_buffer,
-#                 mimetype='audio/wav',
-#                 as_attachment=True,
-#                 download_name=f"{grid_out.filename.split('.')[0]}.wav"
-#             )
+#         return jsonify({"files": files})
 
 #     except Exception as e:
+#         app.logger.error(f"List error: {str(e)}")
 #         return jsonify({"error": str(e)}), 500
-# MAIN WORK
-        audio_data = grid_out.read()
 
-        # Determine MIME type from filename
-        mime_type, _ = mimetypes.guess_type(grid_out.filename)
-        if not mime_type:
-            mime_type = 'application/octet-stream'  # Fallback
+# if __name__ == '__main__':
+#     # Initialize MIME type database
+#     mimetypes.init()
+#     app.run(host='0.0.0.0', port=5001, debug=True)
 
-        return send_file(
-            io.BytesIO(audio_data),
-            mimetype=mime_type,
-            as_attachment=True,
-            download_name=grid_out.filename
-        )
-
-    except Exception as e:
-        app.logger.error(f"Download error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/list', methods=['GET'])
-def list_files():
-    """List all audio files with pagination"""
-    try:
-        db_name = request.args.get('db', DEFAULT_DB)
-        collection = request.args.get('collection', DEFAULT_COLLECTION)
-        
-        db = connect_to_mongodb(db_name)
-        if db is None:
-            return jsonify({"error": "Database connection failed"}), 500
-
-        fs = gridfs.GridFS(db, collection=collection)
-        files = []
-
-        for grid_out in fs.find():
-            files.append({
-                "file_id": str(grid_out._id),
-                "filename": grid_out.filename,
-                "length": grid_out.length,
-                "upload_date": grid_out.upload_date.isoformat(),
-                "content_type": grid_out.content_type
-            })
-
-        return jsonify({"files": files})
-
-    except Exception as e:
-        app.logger.error(f"List error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
-if __name__ == '__main__':
-    # Initialize MIME type database
-    mimetypes.init()
-    app.run(host='0.0.0.0', port=5001, debug=True)
-
-
+#-----------------------
 
 # """
 # MongoDB API Service
