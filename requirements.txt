@@ -3,3 +3,4 @@ pymongo
 gunicorn
 numpy
 wave
+cryptography
