@@ -39,7 +39,7 @@ def upload_audio():
     """Stream audio upload directly to GridFS"""
     try:
         db = connect_to_mongodb(request.args.get('db', DEFAULT_DB))
-        if not db:
+        if db is None:
             return jsonify({"error": "Database connection failed"}), 500
 
         fs = gridfs.GridFS(db)
@@ -65,11 +65,11 @@ def download_audio():
     """Stream audio download directly from GridFS"""
     try:
         db = connect_to_mongodb(request.args.get('db', DEFAULT_DB))
-        if not db:
+        if db is None:
             return jsonify({"error": "Database connection failed"}), 500
 
         file_id = request.args.get('file_id')
-        if not file_id:
+        if file_id is None:
             return jsonify({"error": "Missing file_id"}), 400
 
         fs = gridfs.GridFS(db)
