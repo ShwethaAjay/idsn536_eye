@@ -8,7 +8,7 @@ Key enhancements:
 - GridFS optimizations
 """
 
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 import gridfs
