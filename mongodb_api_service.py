@@ -4,6 +4,36 @@ MongoDB Audio API with Encryption & Streaming
 - Chunked processing for memory efficiency
 - Automatic MIME type handling
 """
+import os
+import sys
+from cryptography.fernet import Fernet
+
+# --- Auto Setup Section ---
+def first_time_setup():
+    """Handle environment setup and key generation"""
+    print("\n🔑 Initial Setup Required 🔑")
+    
+    # Generate new Fernet key
+    new_key = Fernet.generate_key().decode()
+    
+    # Create .env file
+    with open(".env", "w") as f:
+        f.write(f'ENCRYPTION_KEY="{new_key}"\n')
+    
+    print("Generated new encryption key in .env file")
+    print("Install dependencies with:\n  pip install flask pymongo cryptography\n")
+    sys.exit(0)  # Exit to let user install dependencies
+
+# Check dependencies
+try:
+    from flask import Flask, request, jsonify, send_file
+    from pymongo import MongoClient
+except ImportError:
+    first_time_setup()
+
+# Check/create encryption key
+if not os.path.exists(".env") or "ENCRYPTION_KEY" not in os.environ:
+    first_time_setup()
 
 from flask import Flask, request, jsonify, send_file, Response
 from pymongo import MongoClient
