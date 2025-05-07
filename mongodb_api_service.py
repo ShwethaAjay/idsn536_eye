@@ -60,37 +60,84 @@ def upload_audio():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# @app.route('/download', methods=['GET'])
+# def download_audio():
+#     """Stream audio download directly from GridFS"""
+#     try:
+#         db = connect_to_mongodb(request.args.get('db', DEFAULT_DB))
+#         if db is None:
+#             return jsonify({"error": "Database connection failed"}), 500
+
+#         file_id = request.args.get('file_id')
+#         if file_id is None:
+#             return jsonify({"error": "Missing file_id"}), 400
+
+#         fs = gridfs.GridFS(db)
+#         grid_out = fs.get(ObjectId(file_id))
+        
+#         def generate():
+#             # Stream chunks directly from GridFS
+#             for chunk in grid_out:
+#                 yield chunk
+
+#         return Response(
+#             generate(),
+#             mimetype=mimetypes.guess_type(grid_out.filename)[0] or 'application/octet-stream',
+#             headers={
+#                 "Content-Disposition": f"attachment; filename={grid_out.filename}",
+#                 "Content-Length": str(grid_out.length)
+#             }
+#         )
+
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
+
+from flask import Response
+
 @app.route('/download', methods=['GET'])
 def download_audio():
-    """Stream audio download directly from GridFS"""
+    """Stream audio download directly from GridFS with .wav extension"""
     try:
-        db = connect_to_mongodb(request.args.get('db', DEFAULT_DB))
+        db_name = request.args.get('db', DEFAULT_DB)
+        collection = request.args.get('collection', DEFAULT_COLLECTION)
+        file_id = request.args.get('file_id')
+
+        if not file_id:
+            return jsonify({"error": "Missing file_id parameter"}), 400
+
+        obj_id = ObjectId(file_id)
+        db = connect_to_mongodb(db_name)
         if db is None:
             return jsonify({"error": "Database connection failed"}), 500
 
-        file_id = request.args.get('file_id')
-        if file_id is None:
-            return jsonify({"error": "Missing file_id"}), 400
+        fs = gridfs.GridFS(db, collection=collection)
+        if not fs.exists(obj_id):
+            return jsonify({"error": "File not found"}), 404
 
-        fs = gridfs.GridFS(db)
-        grid_out = fs.get(ObjectId(file_id))
-        
+        grid_out = fs.get(obj_id)
+
         def generate():
             # Stream chunks directly from GridFS
             for chunk in grid_out:
                 yield chunk
 
+        # Always use .wav extension
+        base = os.path.splitext(grid_out.filename)[0]
+        download_name = base + ".wav"
+
         return Response(
             generate(),
-            mimetype=mimetypes.guess_type(grid_out.filename)[0] or 'application/octet-stream',
+            mimetype='audio/wav',
             headers={
-                "Content-Disposition": f"attachment; filename={grid_out.filename}",
+                "Content-Disposition": f"attachment; filename={download_name}",
                 "Content-Length": str(grid_out.length)
             }
         )
-
     except Exception as e:
+        app.logger.error(f"Download error: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+
 
 def generate_filename():
     """Generate filename with timestamp"""
