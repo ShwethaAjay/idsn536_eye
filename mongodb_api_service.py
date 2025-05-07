@@ -1,39 +1,9 @@
 """
-MongoDB Audio API with Encryption & Streaming
-- AES-256 encryption for stored audio
-- Chunked processing for memory efficiency
-- Automatic MIME type handling
+MongoDB Audio API Service (Memory Optimized)
+- Chunked streaming for upload/download
+- Buffer management for large files
+- Reduced memory footprint
 """
-import os
-import sys
-from cryptography.fernet import Fernet
-
-# --- Auto Setup Section ---
-def first_time_setup():
-    """Handle environment setup and key generation"""
-    print("\n🔑 Initial Setup Required 🔑")
-    
-    # Generate new Fernet key
-    new_key = Fernet.generate_key().decode()
-    
-    # Create .env file
-    with open(".env", "w") as f:
-        f.write(f'ENCRYPTION_KEY="{new_key}"\n')
-    
-    print("Generated new encryption key in .env file")
-    print("Install dependencies with:\n  pip install flask pymongo cryptography\n")
-    sys.exit(0)  # Exit to let user install dependencies
-
-# Check dependencies
-try:
-    from flask import Flask, request, jsonify, send_file
-    from pymongo import MongoClient
-except ImportError:
-    first_time_setup()
-
-# Check/create encryption key
-if not os.path.exists(".env") or "ENCRYPTION_KEY" not in os.environ:
-    first_time_setup()
 
 from flask import Flask, request, jsonify, send_file, Response
 from pymongo import MongoClient
@@ -45,7 +15,6 @@ import io
 import os
 import mimetypes
 from datetime import datetime
-from cryptography.fernet import Fernet
 
 app = Flask(__name__)
 
@@ -53,13 +22,7 @@ app = Flask(__name__)
 CONNECTION_STRING = "mongodb+srv://Shwetha:anonymeye536@cluster0.ezisqjd.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 DEFAULT_DB = "Anonymeye"
 DEFAULT_COLLECTION = "audio_files"
-CHUNK_SIZE = 1024 * 256  # 256KB chunks for memory efficiency
-
-# Encryption setup
-FERNET_KEY = os.environ.get('ENCRYPTION_KEY')
-if not FERNET_KEY:
-    raise ValueError("ENCRYPTION_KEY environment variable required")
-fernet = Fernet(FERNET_KEY.encode())
+CHUNK_SIZE = 262144  # 256KB chunks (GridFS default)
 
 def connect_to_mongodb(db_name):
     """Establish MongoDB connection with error handling"""
@@ -68,76 +31,75 @@ def connect_to_mongodb(db_name):
         client.admin.command('ping')
         return client[db_name]
     except Exception as e:
-        app.logger.error(f"MongoDB connection failed: {str(e)}")
+        app.logger.error(f"Connection failed: {str(e)}")
         return None
 
 @app.route('/upload', methods=['POST'])
 def upload_audio():
-    """Encrypt and store audio in chunks"""
+    """Stream audio upload directly to GridFS"""
     try:
         db = connect_to_mongodb(request.args.get('db', DEFAULT_DB))
         if not db:
             return jsonify({"error": "Database connection failed"}), 500
 
         fs = gridfs.GridFS(db)
-        encrypted_chunks = []
         
-        # Encrypt in chunks from request stream
-        for chunk in request.stream.read(CHUNK_SIZE):
-            encrypted_chunks.append(fernet.encrypt(chunk))
-
-        # Store encrypted chunks
-        file_id = fs.put(b''.join(encrypted_chunks),
-                        filename=generate_filename(),
-                        metadata={"encrypted": True})
+        # Stream upload directly from request
+        file_id = fs.put(
+            request.stream,
+            filename=generate_filename(),
+            metadata={"source": "ESP32"}
+        )
         
         return jsonify({
             "status": "success",
             "file_id": str(file_id),
-            "filename": fs.get(file_id).filename
+            "chunk_size": CHUNK_SIZE
         })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/download/<file_id>', methods=['GET'])
-def download_audio(file_id):
-    """Stream decrypted audio with proper MIME type"""
+@app.route('/download', methods=['GET'])
+def download_audio():
+    """Stream audio download directly from GridFS"""
     try:
         db = connect_to_mongodb(request.args.get('db', DEFAULT_DB))
         if not db:
             return jsonify({"error": "Database connection failed"}), 500
 
+        file_id = request.args.get('file_id')
+        if not file_id:
+            return jsonify({"error": "Missing file_id"}), 400
+
         fs = gridfs.GridFS(db)
         grid_out = fs.get(ObjectId(file_id))
         
         def generate():
-            # Decrypt and stream in chunks
+            # Stream chunks directly from GridFS
             for chunk in grid_out:
-                yield fernet.decrypt(chunk)
-        
-        mime_type = mimetypes.guess_type(grid_out.filename)[0] or 'audio/wav'
-        
+                yield chunk
+
         return Response(
             generate(),
-            mimetype=mime_type,
-            headers={"Content-Disposition": f"attachment; filename={grid_out.filename}"}
+            mimetype=mimetypes.guess_type(grid_out.filename)[0] or 'application/octet-stream',
+            headers={
+                "Content-Disposition": f"attachment; filename={grid_out.filename}",
+                "Content-Length": str(grid_out.length)
+            }
         )
 
-    except InvalidId:
-        return jsonify({"error": "Invalid file ID format"}), 400
-    except gridfs.NoFile:
-        return jsonify({"error": "File not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 def generate_filename():
-    """Generate encrypted filename with timestamp"""
-    return f"enc_audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bin"
+    """Generate filename with timestamp"""
+    return f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 if __name__ == '__main__':
     mimetypes.init()
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=False)
+
 
 #--------------------------------------
 # """
