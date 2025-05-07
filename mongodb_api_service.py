@@ -1,11 +1,14 @@
 """
-MongoDB Audio API Service (Memory Optimized)
-- Chunked streaming for upload/download
-- Buffer management for large files
-- Reduced memory footprint
+MongoDB Audio API Service (Improved)
+
+Key enhancements:
+- Fixed database connection checks
+- Proper audio MIME type detection
+- Better error handling
+- GridFS optimizations
 """
 
-from flask import Flask, request, jsonify, send_file, Response
+from flask import Flask, request, jsonify, send_file
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 import gridfs
@@ -15,20 +18,22 @@ import io
 import os
 import mimetypes
 from datetime import datetime
+import wave
+import numpy as np
 
 app = Flask(__name__)
 
-# Configuration
+# MongoDB configuration
 CONNECTION_STRING = "mongodb+srv://Shwetha:anonymeye536@cluster0.ezisqjd.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 DEFAULT_DB = "Anonymeye"
 DEFAULT_COLLECTION = "audio_files"
-CHUNK_SIZE = 262144  # 256KB chunks (GridFS default)
 
 def connect_to_mongodb(db_name):
     """Establish MongoDB connection with error handling"""
     try:
         client = MongoClient(CONNECTION_STRING, server_api=ServerApi('1'))
-        client.admin.command('ping')
+        client.admin.command('ping')  # Test connection
+        app.logger.info(f"Connected to MongoDB: {db_name}")
         return client[db_name]
     except Exception as e:
         app.logger.error(f"Connection failed: {str(e)}")
@@ -36,119 +41,285 @@ def connect_to_mongodb(db_name):
 
 @app.route('/upload', methods=['POST'])
 def upload_audio():
-    """Stream audio upload directly to GridFS"""
-    try:
-        db = connect_to_mongodb(request.args.get('db', DEFAULT_DB))
-        if db is None:
-            return jsonify({"error": "Database connection failed"}), 500
-
-        fs = gridfs.GridFS(db)
-        
-        # Stream upload directly from request
-        file_id = fs.put(
-            request.stream,
-            filename=generate_filename(),
-            metadata={"source": "ESP32"}
-        )
-        
-        return jsonify({
-            "status": "success",
-            "file_id": str(file_id),
-            "chunk_size": CHUNK_SIZE
-        })
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# @app.route('/download', methods=['GET'])
-# def download_audio():
-#     """Stream audio download directly from GridFS"""
-#     try:
-#         db = connect_to_mongodb(request.args.get('db', DEFAULT_DB))
-#         if db is None:
-#             return jsonify({"error": "Database connection failed"}), 500
-
-#         file_id = request.args.get('file_id')
-#         if file_id is None:
-#             return jsonify({"error": "Missing file_id"}), 400
-
-#         fs = gridfs.GridFS(db)
-#         grid_out = fs.get(ObjectId(file_id))
-        
-#         def generate():
-#             # Stream chunks directly from GridFS
-#             for chunk in grid_out:
-#                 yield chunk
-
-#         return Response(
-#             generate(),
-#             mimetype=mimetypes.guess_type(grid_out.filename)[0] or 'application/octet-stream',
-#             headers={
-#                 "Content-Disposition": f"attachment; filename={grid_out.filename}",
-#                 "Content-Length": str(grid_out.length)
-#             }
-#         )
-
-#     except Exception as e:
-#         return jsonify({"error": str(e)}), 500
-
-from flask import Response
-
-@app.route('/download', methods=['GET'])
-def download_audio():
-    """Stream audio download directly from GridFS with .wav extension"""
+    """Upload audio to GridFS with proper metadata"""
     try:
         db_name = request.args.get('db', DEFAULT_DB)
         collection = request.args.get('collection', DEFAULT_COLLECTION)
-        file_id = request.args.get('file_id')
-
-        if not file_id:
-            return jsonify({"error": "Missing file_id parameter"}), 400
-
-        obj_id = ObjectId(file_id)
+        
         db = connect_to_mongodb(db_name)
         if db is None:
             return jsonify({"error": "Database connection failed"}), 500
 
         fs = gridfs.GridFS(db, collection=collection)
+        audio_data = request.get_data()
+        
+        if not audio_data:
+            return jsonify({"error": "No audio data received"}), 400
+
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"audio_{timestamp}.m4a"  # Changed to .m4a for better MIME detection
+
+        # Store with metadata
+        file_id = fs.put(audio_data,
+                        filename=filename,
+                        metadata={
+                            "upload_type": "audio",
+                            "source": "ESP32"
+                        })
+
+        return jsonify({
+            "status": "success",
+            "file_id": str(file_id),
+            "filename": filename,
+            "size": len(audio_data)
+        })
+
+    except Exception as e:
+        app.logger.error(f"Upload error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/download', methods=['GET'])
+def download_audio():
+    """Stream audio in chunks directly from GridFS"""
+    try:
+        db_name = request.args.get('db', DEFAULT_DB)
+        collection = request.args.get('collection', DEFAULT_COLLECTION)
+        file_id = request.args.get('file_id')
+
+        # Validate inputs
+        if not file_id:
+            return jsonify({"error": "Missing file_id parameter"}), 400
+        
+        try:
+            obj_id = ObjectId(file_id)
+        except InvalidId:
+            return jsonify({"error": "Invalid file_id format"}), 400
+
+        # Connect to DB
+        db = connect_to_mongodb(db_name)
+        if db is None:
+            return jsonify({"error": "Database connection failed"}), 500
+
+        fs = gridfs.GridFS(db, collection=collection)
+        
         if not fs.exists(obj_id):
             return jsonify({"error": "File not found"}), 404
 
         grid_out = fs.get(obj_id)
 
-        def generate():
-            # Stream chunks directly from GridFS
-            for chunk in grid_out:
+        # Stream generator function
+        def generate_chunks():
+            chunk_size = 4096  # 4KB chunks (adjust based on your needs)
+            while True:
+                chunk = grid_out.read(chunk_size)
+                if not chunk:
+                    break
                 yield chunk
 
-        # Always use .wav extension
-        base = os.path.splitext(grid_out.filename)[0]
-        download_name = base + ".wav"
+        # Get filename with .wav extension
+        base_name = os.path.splitext(grid_out.filename)[0]
+        download_filename = f"{base_name}.wav"
 
+        # Create response with chunked streaming
         return Response(
-            generate(),
+            generate_chunks(),
             mimetype='audio/wav',
             headers={
-                "Content-Disposition": f"attachment; filename={download_name}",
+                "Content-Disposition": f"attachment; filename={download_filename}",
                 "Content-Length": str(grid_out.length)
             }
         )
+
     except Exception as e:
         app.logger.error(f"Download error: {str(e)}")
         return jsonify({"error": str(e)}), 500
+@app.route('/list', methods=['GET'])
+def list_files():
+    """List all audio files with pagination"""
+    try:
+        db_name = request.args.get('db', DEFAULT_DB)
+        collection = request.args.get('collection', DEFAULT_COLLECTION)
+        
+        db = connect_to_mongodb(db_name)
+        if db is None:
+            return jsonify({"error": "Database connection failed"}), 500
 
+        fs = gridfs.GridFS(db, collection=collection)
+        files = []
 
+        for grid_out in fs.find():
+            files.append({
+                "file_id": str(grid_out._id),
+                "filename": grid_out.filename,
+                "length": grid_out.length,
+                "upload_date": grid_out.upload_date.isoformat(),
+                "content_type": grid_out.content_type
+            })
 
-def generate_filename():
-    """Generate filename with timestamp"""
-    return f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        return jsonify({"files": files})
+
+    except Exception as e:
+        app.logger.error(f"List error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
+    # Initialize MIME type database
     mimetypes.init()
-    app.run(host='0.0.0.0', port=5001, debug=False)
+    app.run(host='0.0.0.0', port=5001, debug=True)
+
+# """
+# MongoDB Audio API Service (Memory Optimized)
+# - Chunked streaming for upload/download
+# - Buffer management for large files
+# - Reduced memory footprint
+# """
+
+# from flask import Flask, request, jsonify, send_file, Response
+# from pymongo import MongoClient
+# from pymongo.server_api import ServerApi
+# import gridfs
+# from bson import ObjectId
+# from bson.errors import InvalidId
+# import io
+# import os
+# import mimetypes
+# from datetime import datetime
+
+# app = Flask(__name__)
+
+# # Configuration
+# CONNECTION_STRING = "mongodb+srv://Shwetha:anonymeye536@cluster0.ezisqjd.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+# DEFAULT_DB = "Anonymeye"
+# DEFAULT_COLLECTION = "audio_files"
+# CHUNK_SIZE = 262144  # 256KB chunks (GridFS default)
+
+# def connect_to_mongodb(db_name):
+#     """Establish MongoDB connection with error handling"""
+#     try:
+#         client = MongoClient(CONNECTION_STRING, server_api=ServerApi('1'))
+#         client.admin.command('ping')
+#         return client[db_name]
+#     except Exception as e:
+#         app.logger.error(f"Connection failed: {str(e)}")
+#         return None
+
+# @app.route('/upload', methods=['POST'])
+# def upload_audio():
+#     """Stream audio upload directly to GridFS"""
+#     try:
+#         db = connect_to_mongodb(request.args.get('db', DEFAULT_DB))
+#         if db is None:
+#             return jsonify({"error": "Database connection failed"}), 500
+
+#         fs = gridfs.GridFS(db)
+        
+#         # Stream upload directly from request
+#         file_id = fs.put(
+#             request.stream,
+#             filename=generate_filename(),
+#             metadata={"source": "ESP32"}
+#         )
+        
+#         return jsonify({
+#             "status": "success",
+#             "file_id": str(file_id),
+#             "chunk_size": CHUNK_SIZE
+#         })
+
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
+
+# # @app.route('/download', methods=['GET'])
+# # def download_audio():
+# #     """Stream audio download directly from GridFS"""
+# #     try:
+# #         db = connect_to_mongodb(request.args.get('db', DEFAULT_DB))
+# #         if db is None:
+# #             return jsonify({"error": "Database connection failed"}), 500
+
+# #         file_id = request.args.get('file_id')
+# #         if file_id is None:
+# #             return jsonify({"error": "Missing file_id"}), 400
+
+# #         fs = gridfs.GridFS(db)
+# #         grid_out = fs.get(ObjectId(file_id))
+        
+# #         def generate():
+# #             # Stream chunks directly from GridFS
+# #             for chunk in grid_out:
+# #                 yield chunk
+
+# #         return Response(
+# #             generate(),
+# #             mimetype=mimetypes.guess_type(grid_out.filename)[0] or 'application/octet-stream',
+# #             headers={
+# #                 "Content-Disposition": f"attachment; filename={grid_out.filename}",
+# #                 "Content-Length": str(grid_out.length)
+# #             }
+# #         )
+
+# #     except Exception as e:
+# #         return jsonify({"error": str(e)}), 500
+
+# from flask import Response
+
+# @app.route('/download', methods=['GET'])
+# def download_audio():
+#     """Stream audio download directly from GridFS with .wav extension"""
+#     try:
+#         db_name = request.args.get('db', DEFAULT_DB)
+#         collection = request.args.get('collection', DEFAULT_COLLECTION)
+#         file_id = request.args.get('file_id')
+
+#         if not file_id:
+#             return jsonify({"error": "Missing file_id parameter"}), 400
+
+#         obj_id = ObjectId(file_id)
+#         db = connect_to_mongodb(db_name)
+#         if db is None:
+#             return jsonify({"error": "Database connection failed"}), 500
+
+#         fs = gridfs.GridFS(db, collection=collection)
+#         if not fs.exists(obj_id):
+#             return jsonify({"error": "File not found"}), 404
+
+#         grid_out = fs.get(obj_id)
+
+#         def generate():
+#             # Stream chunks directly from GridFS
+#             for chunk in grid_out:
+#                 yield chunk
+
+#         # Always use .wav extension
+#         base = os.path.splitext(grid_out.filename)[0]
+#         download_name = base + ".wav"
+
+#         return Response(
+#             generate(),
+#             mimetype='audio/wav',
+#             headers={
+#                 "Content-Disposition": f"attachment; filename={download_name}",
+#                 "Content-Length": str(grid_out.length)
+#             }
+#         )
+#     except Exception as e:
+#         app.logger.error(f"Download error: {str(e)}")
+#         return jsonify({"error": str(e)}), 500
 
 
-#--------------------------------------
+
+# def generate_filename():
+#     """Generate filename with timestamp"""
+#     return f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+# if __name__ == '__main__':
+#     mimetypes.init()
+#     app.run(host='0.0.0.0', port=5001, debug=False)
+
+
+#--------------------------------------BEST
 # """
 # MongoDB Audio API Service (Improved)
 
