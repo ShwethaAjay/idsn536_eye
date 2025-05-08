@@ -135,6 +135,53 @@ def download_audio():
     except Exception as e:
         app.logger.error(f"Download error: {str(e)}")
         return jsonify({"error": str(e)}), 500
+@app.route('/download/latest', methods=['GET'])
+def download_latest_audio():
+    """Download the most recent audio file"""
+    try:
+        db_name = request.args.get('db', DEFAULT_DB)
+        collection = request.args.get('collection', DEFAULT_COLLECTION)
+
+        db = connect_to_mongodb(db_name)
+        if db is None:
+            return jsonify({"error": "Database connection failed"}), 500
+
+        fs = gridfs.GridFS(db, collection=collection)
+        
+        # Find the most recent file
+        latest_file = fs.find().sort("uploadDate", -1).limit(1)
+        if not latest_file:
+            return jsonify({"error": "No files found"}), 404
+
+        grid_out = latest_file.next()
+
+        # Stream generator function
+        def generate_chunks():
+            chunk_size = 4096
+            while True:
+                chunk = grid_out.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+
+        # Create filename with .wav extension
+        base_name = os.path.splitext(grid_out.filename)[0]
+        download_filename = f"{base_name}.wav"
+
+        return Response(
+            generate_chunks(),
+            mimetype='audio/wav',
+            headers={
+                "Content-Disposition": f"attachment; filename={download_filename}",
+                "Content-Length": str(grid_out.length)
+            }
+        )
+
+    except Exception as e:
+        app.logger.error(f"Latest download error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/list', methods=['GET'])
 def list_files():
     """List all audio files with pagination"""
